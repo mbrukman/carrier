@@ -1,8 +1,8 @@
 //TODO actually bootstrap should be completely removed once trustvec distribution works and the fixed v4 space has been allocated
 
-using <stdio.h>::{printf, fopen, fclose, fread, FILE, fgetc, EOF};
 using <string.h>::{memcpy, memset};
-using <stdlib.h>::{atoi};
+using <stdlib.h>::{atoi, getenv};
+using <stdio.h>::{printf, fopen, fclose, fread, FILE, fgetc, EOF};
 
 using string;
 using net::address;
@@ -13,7 +13,7 @@ using time;
 using identity;
 using io;
 using net;
-
+using identity_kit;
 
 export const usize MAX_BROKERS = 16;
 
@@ -32,6 +32,30 @@ export struct Store {
     Broker broker[MAX_BROKERS];
 }
 
+export fn empty(Store mut new *self) {
+    self->version =  1;
+}
+
+export fn load_ik(Store mut *self, err::Err+et mut * e, identity_kit::IdentityKit *ik)
+    where err::checked(*e)
+{
+    //TODO principal != identity secret
+    memcpy(self->secret, ik->principal.k, 32);
+}
+
+export fn get_identity(Store * self, identity::Identity mut*id) {
+    identity::identity_from_secret(id, (identity::Secret*)&self->secret);
+}
+
+export fn sync(err::Err+et mut * e, Store mut* store, net::Engine *netengine, io::Async mut* async, time::Time timeout)
+    where err::checked(*e)
+{
+    new bs = bootstrap(e, store, netengine, async);
+    if err::check(e) { return; }
+    io::await(async, e, poll, &bs, timeout);
+    if err::check(e) { return; }
+    bs.close();
+}
 
 export fn from_store(Broker *b, address::Address mut *ip4addr, address::Address mut *ip6addr, identity::Address mut *xaddr) -> bool {
     if b->protocol == 0 {
@@ -60,37 +84,32 @@ export struct Bootstrap {
     udp::Socket         sock4;
     udp::Socket         sock6;
     io::Io              mut retry_timer;
+    Store               mut* store;
 }
 
-export fn new(err::Err+et mut * e,io::Async mut* async, net::Engine *netengine) -> Bootstrap
+export fn bootstrap(Bootstrap mut new*self, err::Err+et mut * e, Store mut*store, net::Engine *netengine, io::Async mut* async)
     where err::checked(*e)
 {
+    self->store = store;
 
-    Bootstrap mut self = Bootstrap {
-        dns_servers_count: 0
-    };
+    address::from_cstr(self->dns_servers+0,"8.8.8.8:53");
+    address::from_cstr(self->dns_servers+1,"1.1.1.1:53");
+    address::from_cstr(self->dns_servers+2,"[2001:4860:4860::8888]:53");
+    address::from_cstr(self->dns_servers+3,"[2620:119:35::35]:53");
+    self->dns_servers_count = 4;
 
-    (self.dns_servers)[0] = address::from_cstr("8.8.8.8:53");
-    (self.dns_servers)[1] = address::from_cstr("1.1.1.1:53");
-    (self.dns_servers)[2] = address::from_cstr("[2001:4860:4860::8888]:53");
-    (self.dns_servers)[3] = address::from_cstr("[2620:119:35::35]:53");
-    self.dns_servers_count = 4;
+    get_system_dns_servers(self->dns_servers, &self->dns_servers_count);
 
-    get_system_dns_servers(self.dns_servers, &self.dns_servers_count);
-
-    address::Address addr4 = address::from_cstr("0.0.0.0:0");
-    self.sock4 = netengine->new_udp(e, &addr4, async);
+    new addr4 = address::from_cstr("0.0.0.0:0");
+    self->sock4 = netengine->new_udp(e, &addr4, async);
     if err::check(e) {
-        return self;
+        return;
     }
 
-    address::Address addr6 = address::from_cstr("[::1]:0");
-    self.sock6 = netengine->new_udp(e, &addr6, async);
+    new addr6 = address::from_cstr("[::1]:0");
+    self->sock6 = netengine->new_udp(e, &addr6, async);
     // ignore v6 creation error
     err::new(e);
-
-
-    return self;
 }
 
 
@@ -99,7 +118,7 @@ export fn close(Bootstrap mut * self) {
     self->sock6.close();
 }
 
-export fn next(Bootstrap mut * self, err::Err+et mut * e, io::Async mut* async, Store mut* store) -> io::Result
+export fn poll(Bootstrap mut * self, err::Err+et mut * e, io::Async mut* async) -> io::Result
     where err::checked(*e)
 {
     string::String+1500 mut xbuf = {0};
@@ -122,7 +141,15 @@ export fn next(Bootstrap mut * self, err::Err+et mut * e, io::Async mut* async, 
             return io::Result::Error;
         }
 
-        string::append_cstr(&xbuf, "4.carrier.devguard.io");
+
+        char *fromenv = (char*)getenv("CARRIER_BROKER_DOMAINS");
+        if fromenv != 0 {
+            static_attest(safe(fromenv));
+            static_attest(nullterm(fromenv));
+            string::append_cstr(&xbuf, fromenv);
+        } else {
+            string::append_cstr(&xbuf, "4.carrier.devguard.io");
+        }
         for (usize mut i = 0; i < self->dns_servers_count; i++) {
             switch self->dns_servers[i].type {
                 address::Type::Invalid => {
@@ -141,10 +168,15 @@ export fn next(Bootstrap mut * self, err::Err+et mut * e, io::Async mut* async, 
         }
     }
 
+    if err::check(e) {
+        return io::Result::Error;
+    }
+
     xbuf.clear();
-    address::Address mut from = address::new();
+    new from = address::none();
     if (self->sock6).recvfrom(e, &xbuf, &from) == io::Result::Ready {
-        if parse_query(&xbuf, store) {
+        static_attest(safe(self->store));
+        if parse_query(&xbuf, self->store) {
             return io::Result::Ready;
         }
     }
@@ -154,7 +186,7 @@ export fn next(Bootstrap mut * self, err::Err+et mut * e, io::Async mut* async, 
 
     xbuf.clear();
     if (self->sock4).recvfrom(e, &xbuf, &from) == io::Result::Ready {
-        if parse_query(&xbuf, store) {
+        if parse_query(&xbuf, self->store) {
             return io::Result::Ready;
         }
     }
@@ -183,11 +215,13 @@ fn send_query(
     where err::checked(*e)
 {
 
+    /*
     {
         string::String+100 mut dbg = {0};
         dns_server->to_string(&dbg);
         printf("sending to %.*s\n", dbg.len, dbg.mem);
     }
+    */
 
     string::String+1000 mut pkt = {0};
 
@@ -367,7 +401,7 @@ pub fn parse_record(string::String+st * record, Broker mut *entry) -> bool {
             static_attest(safe(from));
             static_attest(len(from) >= fromlen);
 
-            address::Address mut a = address::from_str(from, fromlen);
+            new a = address::from_str(from, fromlen);
             if a.valid() {
                 memcpy(entry->ip4addr, address::get_ip(&a), 4);
                 has_netaddr = true;
@@ -378,7 +412,7 @@ pub fn parse_record(string::String+st * record, Broker mut *entry) -> bool {
             static_attest(safe(from));
             static_attest(len(from) >= fromlen);
 
-            address::Address mut a = address::from_str(from, fromlen);
+            new mut a = address::from_str(from, fromlen);
             if a.valid() {
                 memcpy(entry->ip6addr, address::get_ip(&a), 16);
                 has_netaddr = true;
@@ -450,7 +484,7 @@ fn get_system_dns_servers(address::Address mut *dns_servers, usize mut *at)
             string::substr(&str, 11, 0, &sub);
 
 
-            dns_servers[*at] = address::from_string(&sub);
+            address::from_string(dns_servers + *at, &sub);
             if (dns_servers[*at]).valid() {
                 (dns_servers[*at]).set_port(53);
                 *at += 1;

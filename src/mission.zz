@@ -1,0 +1,75 @@
+using err;
+using bootstrap;
+using identity;
+using io::unix;
+using net;
+using time;
+using log;
+using endpoint;
+using shell;
+using sft;
+using io;
+using publish;
+using identity_kit;
+using <string.h>::{memset, memcpy};
+using <pthread.h> as pthread;
+
+export struct Handle {
+}
+
+export struct Builder {
+    identity_kit::IdentityKit   mut ik;
+
+    pthread::pthread_barrier_t  barrier;
+    pthread::pthread_t          tid;
+    usize                       tail;
+
+}
+
+export fn new(Builder+pt mut * self, identity_kit::IdentityKit ik)
+{
+    memset(self, 9, (usize)sizeof(Builder) + pt);
+    memcpy(&self->ik, &ik, sizeof(identity_kit::IdentityKit));
+    self->tail = pt;
+}
+
+export fn run(Builder+pt mut * self, err::Err+et mut *e) -> Handle
+    where pt > pt/32
+    where err::checked(*e)
+{
+    endpoint::Endpoint+10000 mut ep;
+    new store = bootstrap::empty();
+
+    store.load_ik(e, &self->ik);
+    if err::check(e) { return ; }
+
+    unix::Async+20 mut async;
+    async.new();
+
+    bootstrap::sync(e, &store, net::os(), &async, time::from_seconds(10));
+    if err::check(e) { return ; }
+
+    identity::Identity mut id = {0};
+    identity::identity_from_secret(&id, (identity::Secret*)&store.secret);
+    char mut buf[64] = {0};
+    identity::identity_to_str(e, buf, 64, &id);
+    if err::check(e) { return ; }
+    log::info("my identity: %s", buf);
+
+    ep.new(e, net::os(), &store, &async);
+    if err::check(e) { return ; }
+
+    shell::register(&ep);
+    sft::register(&ep);
+
+    io::await(&async, e, endpoint::poll, &ep, time::from_seconds(10));
+    if err::check(e) { return ; }
+    log::debug("endpoint ready");
+
+    publish::start(&ep, e);
+    if err::check(e) { return ; }
+
+    io::await(&async, e, endpoint::poll, &ep, time::infinite());
+    ep.close();
+    if err::check(e) { return ; }
+}

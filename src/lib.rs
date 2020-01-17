@@ -1,70 +1,4 @@
-#![feature(generators, generator_trait)]
-
-extern crate byteorder;
-extern crate clear_on_drop;
-extern crate snow;
-extern crate rand;
-#[macro_use]
-extern crate log;
-extern crate bytes;
-extern crate dirs;
-pub extern crate mio;
-pub extern crate osaka;
-extern crate osaka_dns;
 pub extern crate prost;
-extern crate serde;
-extern crate toml;
-#[macro_use]
-extern crate serde_derive;
-extern crate libc;
-
-extern crate axon;
-extern crate mio_extras;
-extern crate mtdparts;
-extern crate nix;
-extern crate num_cpus;
-extern crate wait_timeout;
-extern crate which;
-#[cfg(feature = "uefi")]
-extern crate smbios;
-#[cfg(feature = "uefi")]
-extern crate cluproccmdline;
-
-#[macro_use]
-#[cfg(target_arch = "wasm32")]
-extern crate wasm_bindgen;
-
-pub mod certificate;
-pub mod channel;
-pub mod clock;
-#[cfg(feature = "conduit")]
-pub mod conduit;
-pub mod config;
-pub mod dns;
-pub mod easy;
-pub mod endpoint;
-pub mod error;
-pub mod headers;
-pub mod identity;
-pub mod local_addrs;
-pub mod mock;
-pub mod noise;
-pub mod packet;
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android",))]
-pub mod publisher;
-pub mod recovery;
-pub mod replay;
-pub mod stream;
-pub mod subscriber;
-pub mod util;
-pub mod tcp;
-
-mod hacl_star;
-
-pub use easy::connect;
-pub use error::Error;
-pub use identity::Identity;
-pub use identity::Secret;
 
 mod revision;
 pub use revision::REVISION;
@@ -76,4 +10,52 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/carrier.sysinfo.v1.rs"));
     include!(concat!(env!("OUT_DIR"), "/carrier.discovery.v1.rs"));
     include!(concat!(env!("OUT_DIR"), "/genesis.v1.rs"));
+}
+
+
+
+
+#[path = "../target/debug/rs/err.rs"]
+pub mod err;
+
+#[path = "../target/debug/rs/carrier_identity_kit.rs"]
+pub mod identity_kit;
+
+pub use err::Err as Error;
+
+pub const ERR_TAIL : usize = 1000;
+impl Error {
+    pub fn check(&mut self) -> Result<(), std::io::Error> {
+        unsafe {
+            let this_file = file!();
+            let this_line = line!();
+            let e = err::check(
+                self._self(),
+                ERR_TAIL,
+                this_file.as_bytes().as_ptr() as *const u8,
+                std::ptr::null(),
+                this_line as usize
+            );
+            if e  {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, self.clone()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = [0u8;1024];
+        err::to_str(
+            self._self(),
+            s.as_mut_ptr(),
+            s.len()
+            );
+        let ll = libc::strlen(s.as_ptr() as *const i8) + 1;
+        let s :String = String::from_utf8_lossy(&s[..ll]).into();
+        write!(f, "{}", s)?;
+        Ok(())
+    }
 }

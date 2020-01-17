@@ -248,7 +248,6 @@ pub fn main() -> int {
         }
     }
 
-
     noise::Initiator mut init = {0};
     memcpy(init.ephemeral.k, tc.init_ephermal, 32);
     memcpy(init.remote_static.k, tc.init_remote_static, 32);
@@ -291,7 +290,8 @@ pub fn main() -> int {
     memcpy(resp.statickey.k,  tc.resp_static, 32);
 
     static_attest(tc.resp_prologue.len < len(tc.resp_prologue.mem));
-    usize pkt1r_size = noise::receive(&resp, &e, pkt1r, static(len(pkt1r)), (u8*)tc.resp_prologue.mem, tc.resp_prologue.len, pkt1, pkt1len);
+    usize pkt1r_size = noise::receive(&resp, &e,
+        pkt1r, static(len(pkt1r)), (u8*)tc.resp_prologue.mem, tc.resp_prologue.len, pkt1, pkt1len);
     if err::check(&e) {
         e.eprint();
         return (int)e.error;
@@ -553,8 +553,8 @@ pub fn t2() ->int {
     e.new();
 
     noise::Initiator mut init = noise::Initiator {
-        ephermal       : init_ephermal,
-        remote_static  : remote_static,
+        ephemeral:      init_ephermal,
+        remote_static:  remote_static,
     };
 
     u8 mut pkt1[1024] = {0};

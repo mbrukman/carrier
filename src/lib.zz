@@ -6,10 +6,12 @@ using cipher;
 using sha256;
 using hpack::encoder;
 using hpack::decoder;
+using bootstrap;
+using endpoint;
 
 
 //TODO
-const u32 REVISION = 0x1111;
+pub const u32 REVISION = 0x1111;
 
 export fn hellozz() -> int {
     printf("hello carrier\n");

@@ -1,0 +1,72 @@
+using err;
+using bootstrap;
+using identity;
+using toml;
+using fs;
+using string;
+using <stdio.h>::{printf, fopen, fclose, fread, FILE, fgetc, EOF};
+
+export struct IdentityKit
+{
+    identity::Secret    principal;
+    identity::Secret    network;
+}
+
+
+export fn ephemeral(IdentityKit mut new* self, err::Err+et mut *e)
+     where err::checked(*e)
+{
+    identity::secret_generate (e, &self->principal);
+    if err::check(e) {return;}
+
+    identity::secret_generate (e, &self->network);
+    if err::check(e) {return;}
+}
+
+
+export fn carriertoml(IdentityKit mut new* self, err::Err+et mut *e)
+    where err::checked(*e)
+{
+    toml::Parser+1000 mut parser = {0};
+    parser.new(e, (toml::deserialize_t)load_from_toml_cb, self);
+    if err::check(e) {return;}
+
+    string::String+300 mut ff;
+    ff.clear();
+    fs::get_homedir(e, &ff);
+    if err::check(e) {return;}
+    ff.append_cstr("/.devguard/carrier.toml");
+
+    let f = (FILE mut*)fopen(ff.mem, "r");
+    if f == 0 {
+        err::fail_with_errno(e, "open %s", ff.mem);
+        return;
+    }
+
+    char mut buf[300];
+    for(;;) {
+        usize bin = as<usize>(fread(buf, sizeof(char), static(len(buf)), f));
+        if bin == 0 {
+            break;
+        }
+        static_attest(bin < len(buf));
+        toml::push(&parser, e, buf, bin);
+        if err::check(e) { fclose(f); return; }
+    }
+
+    fclose(f);
+}
+
+fn load_from_toml_cb(err::Err+et mut *e, toml::Parser+pt mut* p, void mut *user, char *k, toml::Value v)
+    where err::checked(*e)
+{
+    let store = (IdentityKit mut*)user;
+    static_attest(safe(store));
+    static_attest(nullterm(v.string));
+    static_attest(nullterm(k));
+    static_attest(safe(v.string));
+    if v.t == toml::ValueType::String && string::cstr_eq(k, "secret") {
+        identity::secret_from_str(e, &store->principal, v.string, string::strlen(v.string));
+    }
+}
+
